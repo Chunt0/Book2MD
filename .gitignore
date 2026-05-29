@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Secrets / local env (keep .env.example committed)
+.env
+.env.local
+.env.*.local
+
+# Build output
+dist/
+packages/*/dist/
+
+# ── Local data — NEVER commit ──────────────────────────────────────────────
+# Holds uploaded PDFs (COPYRIGHTED source material), the SQLite DB, converted
+# Markdown/images, and marker fixtures. All of it stays on the box.
+/data/*
+!/data/.gitkeep
+
+# Backups
+backups/
+
+# Logs / editor / OS noise
+*.log
+.DS_Store
+.idea/
+.vscode/

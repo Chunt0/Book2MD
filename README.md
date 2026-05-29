@@ -1,63 +1,101 @@
-# Full-Stack Template
+# Book2MD
 
-An opinionated, wiring-only full-stack template. Architecture decided, primitives
-built, a worked reference feature included — clone it, write a short project spec,
-and build features into an already-wired skeleton.
+A fully-local web app that converts **PDF textbooks → clean Markdown** with a fast,
+page-by-page QA workflow — built to feed a downstream knowledge base. Nothing leaves
+the machine (the source material is copyrighted), and conversion is **100% deterministic
+— no LLM**.
 
-**One Bun process** serves the API **and** the React SPA (same-origin, no CORS,
-no nginx). Type-safe end to end, SQLite-backed, one Docker image.
+Conversion uses [`marker`](https://github.com/datalab-to/marker) on the GPU. An early
+experiment with LLM-assisted conversion (Ollama/Gemma) was measured to take *hours per
+book* for no quality gain over marker's already-clean output, so it was dropped — see
+[`NEW_PROJECT_SPEC.md`](./NEW_PROJECT_SPEC.md) §"M0 outcomes".
 
-## Stack
+## What it does
+
+1. **Upload** a PDF through the web UI.
+2. **Convert** it to Markdown with `marker` (deterministic, GPU, ~30–45 min/book). Math
+   comes out as KaTeX-ready `$…$`/`$$…$$`; figures are extracted, captioned, and kept.
+3. **Browse & read** the rendered Markdown (math + tables + figures) per book.
+4. **QA fast** in a side-by-side review workspace: the source PDF page beside the
+   Markdown, an automatic **lint pass** (running headers/footers, page numbers, broken
+   equations via KaTeX, ragged tables, hyphenation, …) that flags only the pages that
+   need attention, **one-click fixes**, **book-wide strip**, **bulk approve**, inline
+   editing with edit-protection, and keyboard-driven navigation.
+5. **Export** `book.md` + an `images/` folder your KB can ingest directly.
+
+## Architecture
+
+One **Bun** process serves the Elysia API *and* the React SPA (same-origin, no CORS),
+type-safe end-to-end via Eden Treaty, SQLite + Drizzle. Conversion runs in a separate
+**GPU Docker service** (`marker_server`) that the API proxies; the SPA never calls it
+directly. See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) and the full design in
+[`NEW_PROJECT_SPEC.md`](./NEW_PROJECT_SPEC.md).
 
 | Layer | Choice |
 |-------|--------|
-| Runtime | Bun |
-| API | Elysia (+ Eden Treaty for end-to-end types, zero codegen) |
+| Runtime / API | Bun + Elysia (+ Eden Treaty, zero codegen) |
 | DB | SQLite (`bun:sqlite`) + Drizzle ORM |
 | Frontend | React 19 + Vite + React Router v7 + TanStack Query v5 |
-| UI | Tailwind v4 + Radix Primitives + CVA |
-| Deploy | one multi-stage Docker image + `docker compose` |
-| Tests | `bun:test` (API) + Vitest + Testing Library (frontend) |
+| UI | Tailwind v4 + Radix + CVA; `react-markdown` + KaTeX; `pdf.js`; CodeMirror |
+| Conversion | `marker` (Surya models) in a CUDA Docker service — deterministic, no LLM |
+| Auth | Mode A (none) — localhost only |
+
+## Requirements
+
+- An **NVIDIA GPU** + Docker with the **nvidia-container-toolkit** (marker runs on CUDA).
+  Built and tested on an RTX A6000 (48 GB).
+- [Bun](https://bun.sh) for the app.
 
 ## Quickstart
 
 ```bash
-scripts/init-project.sh "My App"  # generate .env (token + display name), install, migrate, seed
+cp .env.example .env                 # Mode A — no token needed; defaults are fine
+bun install
 
-bun run dev                       # API :4000 + Vite :3000 (HMR)
-# or the containerized stack (mirrors deploy):
-docker compose up -d --build      # http://localhost:3000
+# 1) Start the marker GPU service (first run: builds the image + downloads Surya
+#    model weights to a cache volume — a few GB, one time).
+docker compose up -d --build marker
+
+# 2) Set up the DB and run the app (API :4000 + Vite :3000, HMR).
+bun run db:migrate
+bun run dev
 ```
+
+Open **http://localhost:3000**, upload a PDF, and watch it convert. Converted books
+land under `data/books/<slug>/` (PDF, extracted images, `book.md`); all of `data/` is
+git-ignored.
 
 ## Everyday commands
 
 ```bash
-bun run check          # type-check + lint + test (the gate)
+bun run check          # type-check + lint + test (the gate — keep it green)
 bun run dev            # local dev with HMR
 bun run db:generate    # after editing packages/api/src/db/schema.ts
 bun run db:migrate     # apply migrations (also runs on API boot)
-bun run db:seed        # idempotent seed
-bun run eject:reference # remove the example feature once you don't need it
-./scripts/backup.sh     # gzipped SQLite snapshot (cron-friendly)
+docker compose up -d --build marker   # (re)build/start the GPU conversion service
 ```
 
 ## Where things live
 
-- `packages/api` — Bun + Elysia API (also serves the SPA in production)
-- `packages/frontend` — React SPA
-- `docs/ARCHITECTURE.md` — topology, decisions, deploy, escape hatches
-- `docs/DESIGN_SYSTEM.md` — UI primitives + page archetypes
-- `CLAUDE.md` — how to build features (the build sequence + conventions)
-- `WIRED.md` — one-page index of every wired capability
-- `GOTCHAS.md` — the sharp edges
+- `packages/api` — Bun + Elysia API (books / pages / jobs / tags, the conversion worker,
+  the lint catalog `lib/lint.ts`, the marker adapter `lib/marker.ts`)
+- `packages/frontend` — React SPA (Library, Book detail, Review workspace)
+- `infra/marker` — the marker GPU service Dockerfile
+- `NEW_PROJECT_SPEC.md` — the full design spec (data model, API, QA subsystem, milestones)
+- `docs/ARCHITECTURE.md` / `docs/DESIGN_SYSTEM.md` — topology + UI system
+- `CLAUDE.md` — conventions / how features are wired
 
-## Auth
+## Status
 
-Ships **Mode B** (shared bearer token in `.env`, baked into the SPA). See
-`docs/ARCHITECTURE.md` for Mode A (none) and Mode C (login + cookie).
+The core loop is complete: **upload → convert → browse/read → review → export.**
 
-## Deploying & exposing
+| Milestone | |
+|---|---|
+| Spike, conversion spine, browse & read, review workspace, QA-fast lint | ✅ done |
+| Gemma QA assistant | ❌ cut (no LLM — base output + lint + human review suffice) |
+| Polish & hardening (deliberate re-convert, job-failure UX, backups) | ☐ remaining |
 
-`docker compose up -d --build` runs the whole thing on `:3000`. To reach it from
-other devices, put Tailscale / Caddy / Cloudflare Tunnel in front — see the
-**pre-expose checklist** in `docs/ARCHITECTURE.md` before exposing it anywhere.
+## Privacy
+
+Everything runs locally; no cloud APIs for conversion or anything else. Uploaded PDFs and
+all converted output live under `data/` and are **never** committed (`.gitignore`).
