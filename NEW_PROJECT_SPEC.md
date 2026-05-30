@@ -445,10 +445,13 @@ restart). No external queue service.
 
 **Convert job steps** (each updates `jobs.stage`/`progress`, `books.status`):
 1. `queued` → worker sets job `running`, book `converting`.
-2. `stage: calling marker` — POST `/marker` with settings; `progress` indeterminate (marker is
-   a single blocking call — no per-page stream by default; UI shows elapsed time). `VERIFY-IN-M0`:
-   check whether marker exposes finer progress; if not, optionally chunk by `page_range` to gain
-   progress + resumability (future).
+2. `stage: converting pages X-Y of N (chunk c/total)` — the book is converted in `page_range`
+   chunks of `MARKER_CHUNK_PAGES` (default 25), not one whole-book call. This is **required**, not
+   just for progress: Bun's `fetch` hard-caps any request at ~300s and ignores a longer
+   `AbortSignal` ([oven-sh/bun#16682](https://github.com/oven-sh/bun/issues/16682)), so a large book
+   in a single blocking marker call always times out (see GOTCHAS G14). marker numbers `{N}` page
+   separators and image filenames absolutely, so chunks merge with no re-indexing. Each chunk has its
+   own sub-300s timeout + one transient retry; `progress` advances per chunk.
 3. `stage: post-processing` — adapter normalizes result, writes images, derives per-page Markdown.
 4. `stage: splitting pages` — upsert `pages` by `(bookId, pageNumber)` honoring edit-protection (§17).
 5. `stage: linting` — run the lint pass (§16.1) to populate `flagsJson`.
@@ -457,8 +460,9 @@ restart). No external queue service.
 - **Failure** at any step: job `failed` (`error`), book `failed` (`errorMessage`). Retdownloadable
   via `POST /convert` again.
 
-**Progress reality.** Honest stage-based progress (queued → calling marker → post-processing →
-splitting → linting → done), not a per-page bar, because `marker_server` returns once at the end.
+**Progress reality.** Per-chunk progress (queued → converting pages X-Y (chunk c/total) →
+post-processing → splitting → linting → done). Not a per-page bar — `marker_server` returns once
+per chunk, not per page — but each chunk advances the bar, so large books show real movement.
 
 ## 16. QA subsystem
 
@@ -668,7 +672,8 @@ Each milestone is independently useful; M0 front-loads the unknowns.
   assist, never bulk conversion.
 
 **Open questions (non-blocking, defaults chosen).**
-- Per-page conversion progress — deferred; stage-based progress for v1 (could chunk by page_range).
+- Per-page conversion progress — per-chunk progress shipped (chunk by `page_range`, forced by Bun's
+  300s fetch cap, GOTCHAS G14); finer per-page streaming still deferred.
 - Block↔Markdown mapping granularity for click-to-highlight — page-level v1, block-level if clean.
 - Batch LLM cleanup auto-apply policy — opt-in, off by default (M5).
 
