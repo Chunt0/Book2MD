@@ -3,15 +3,20 @@ import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
 import { db } from '../db'
 import { books, jobs, pages } from '../db/schema'
+import { env } from './env'
+import { ServiceUnavailableError } from './errors'
 import { lintBook } from './lint'
 import { logger } from './logger'
-import { callMarker, parsePaginatedMarkdown } from './marker'
+import { callMarker, parsePaginatedMarkdown, type ParsedPage } from './marker'
+import { getPdfPageCount } from './pdf'
 import { bookPaths, toMarkerPath, writeImages } from './storage'
 
 // In-process sequential job worker (concurrency 1 — one book at a time, one GPU).
-// The marker call is a single blocking request, so progress is stage-based, not
-// per-page (NEW_PROJECT_SPEC §15). Enqueue chains onto a promise so jobs run one
-// at a time regardless of how many are submitted.
+// A book is converted in page-range chunks (MARKER_CHUNK_PAGES each) because
+// marker runs one blocking request per call and Bun's fetch hard-caps at ~300s
+// (oven-sh/bun#16682) — a whole large book in one call always times out. Chunking
+// also gives real per-chunk progress. Enqueue chains onto a promise so jobs run
+// one at a time regardless of how many are submitted.
 
 const nowIso = () => new Date().toISOString()
 
@@ -49,16 +54,56 @@ async function runConvert(jobId: number): Promise<void> {
   const t0 = performance.now()
   try {
     const p = bookPaths(book.slug)
-    const resp = await callMarker(toMarkerPath(p.pdf), {
-      forceOcr: params.forceOcr ?? false,
-    })
+    const markerPath = toMarkerPath(p.pdf)
+    const forceOcr = params.forceOcr ?? false
 
-    db.update(jobs).set({ stage: 'post-processing', progress: 0.7 }).where(eq(jobs.id, jobId)).run()
-    await writeImages(book.slug, resp.images)
-    await writeFile(join(p.markerDir, 'output.md'), resp.output)
+    // Chunk by absolute page range. marker rejects any range past the document,
+    // so we need the exact count up front to clamp the final chunk. It numbers
+    // both {N} page separators and image filenames ABSOLUTELY, so chunks merge
+    // with no re-indexing and no image-name collisions.
+    const pageCount = await getPdfPageCount(p.pdf)
+    const chunkPages = Math.max(1, env.MARKER_CHUNK_PAGES)
+    const numChunks = Math.ceil(pageCount / chunkPages)
 
-    db.update(jobs).set({ stage: 'splitting pages', progress: 0.85 }).where(eq(jobs.id, jobId)).run()
-    const parsed = parsePaginatedMarkdown(resp.output)
+    const images: Record<string, string> = {}
+    const outputs: string[] = []
+    const parsed: ParsedPage[] = []
+    for (let c = 0; c < numChunks; c++) {
+      if (performance.now() - t0 > env.CONVERT_TIMEOUT_MS) {
+        throw new Error(`Conversion exceeded ${env.CONVERT_TIMEOUT_MS}ms budget after ${c}/${numChunks} chunks`)
+      }
+      const startPage = c * chunkPages
+      const endPage = Math.min((c + 1) * chunkPages, pageCount) - 1
+      db.update(jobs)
+        .set({
+          stage: `converting pages ${startPage + 1}-${endPage + 1} of ${pageCount} (chunk ${c + 1}/${numChunks})`,
+          progress: Number(((c / numChunks) * 0.85).toFixed(3)),
+        })
+        .where(eq(jobs.id, jobId))
+        .run()
+
+      const chunkOpts = { forceOcr, pageRange: `${startPage}-${endPage}`, timeoutMs: env.MARKER_CHUNK_TIMEOUT_MS }
+      let resp
+      try {
+        resp = await callMarker(markerPath, chunkOpts)
+      } catch (e) {
+        // Retry once on a transient transport failure (timeout/unreachable); an
+        // upstream "marker failed" (BadGatewayError) is deterministic — don't retry.
+        if (!(e instanceof ServiceUnavailableError)) throw e
+        logger.warn({ jobId, bookId: book.id, chunk: c + 1, err: String(e) }, 'marker chunk transient failure — retrying once')
+        resp = await callMarker(markerPath, chunkOpts)
+      }
+      Object.assign(images, resp.images)
+      outputs.push(resp.output)
+      parsed.push(...parsePaginatedMarkdown(resp.output))
+    }
+
+    db.update(jobs).set({ stage: 'post-processing', progress: 0.88 }).where(eq(jobs.id, jobId)).run()
+    await writeImages(book.slug, images)
+    await writeFile(join(p.markerDir, 'output.md'), outputs.join('\n\n'))
+
+    db.update(jobs).set({ stage: 'splitting pages', progress: 0.92 }).where(eq(jobs.id, jobId)).run()
+    // `parsed` already holds absolute-numbered pages across every chunk.
     // First-conversion semantics: replace pages wholesale. Edit-protection on
     // re-conversion is M6 (NEW_PROJECT_SPEC §17).
     db.delete(pages).where(eq(pages.bookId, book.id)).run()

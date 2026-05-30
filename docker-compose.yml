@@ -8,16 +8,20 @@ services:
         VITE_AUTH_TOKEN: ${AUTH_TOKEN}
         VITE_APP_NAME: ${VITE_APP_NAME:-App}
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    # Host networking so the app can reach marker on the host loopback (:8001).
+    # marker runs network_mode: host; a bridge-networked app's "localhost" is
+    # itself, not the host, so it could never reach marker. Listens on host :3000.
+    network_mode: host
     environment:
       NODE_ENV: production
       DATABASE_PATH: /data/app.db
       AUTH_TOKEN: ${AUTH_TOKEN}
+      MARKER_URL: http://localhost:8001
       ENABLE_SWAGGER: ${ENABLE_SWAGGER:-false}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
-      - app-data:/data
+      # Same host bind marker mounts, so uploaded PDFs are visible to both by path.
+      - ./data:/data
 
   # GPU PDF→Markdown service (M0+), deterministic — no LLM. network_mode: host →
   # serves :8001 on the host. Shares ./data with the Bun app so it can read uploaded
@@ -43,5 +47,4 @@ services:
               capabilities: [gpu]
 
 volumes:
-  app-data:
   marker-cache:

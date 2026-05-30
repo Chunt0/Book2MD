@@ -12,6 +12,10 @@ export interface MarkerOptions {
   forceOcr?: boolean
   /** Subset of pages, e.g. "0,5-10". Omit for the whole document. */
   pageRange?: string
+  /** Abort the request after this many ms. Defaults to CONVERT_TIMEOUT_MS.
+   * NOTE: Bun's fetch hard-caps any request at ~300s regardless (oven-sh/bun#16682),
+   * so callers must keep this — and the per-call work — under that ceiling. */
+  timeoutMs?: number
 }
 
 export interface MarkerResponse {
@@ -39,7 +43,7 @@ export async function callMarker(containerPath: string, opts: MarkerOptions = {}
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(env.CONVERT_TIMEOUT_MS),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? env.CONVERT_TIMEOUT_MS),
     })
   } catch (e) {
     throw new ServiceUnavailableError(`marker unreachable at ${env.MARKER_URL}: ${String(e)}`)

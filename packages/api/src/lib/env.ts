@@ -39,8 +39,15 @@ export const env = {
   MARKER_URL: optional('MARKER_URL', 'http://localhost:8001'),
   /** Upload size cap (MB). */
   MAX_UPLOAD_MB: Number(optional('MAX_UPLOAD_MB', '200')),
-  /** marker call timeout (ms). */
+  /** Overall conversion budget across all chunks (ms). */
   CONVERT_TIMEOUT_MS: Number(optional('CONVERT_TIMEOUT_MS', '1800000')),
+  /** Pages per marker request. Books convert in chunks because marker runs one
+   * blocking request per call and Bun's fetch hard-caps at 5 min (oven-sh/bun#16682);
+   * smaller chunks stay under the cap and give per-chunk progress. */
+  MARKER_CHUNK_PAGES: Number(optional('MARKER_CHUNK_PAGES', '25')),
+  /** Per-chunk fetch timeout (ms). Kept under Bun's ~300s fetch cap so a stuck
+   * chunk fails cleanly with our message instead of Bun's opaque one. */
+  MARKER_CHUNK_TIMEOUT_MS: Number(optional('MARKER_CHUNK_TIMEOUT_MS', '290000')),
   // No LLM / Ollama config — Book2MD conversion + QA are fully deterministic.
 } as const
 
