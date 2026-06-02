@@ -1,5 +1,5 @@
 import { ArrowLeft, ClipboardCheck, Download, FileText, RefreshCw, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { ErrorState } from '@/components/feedback/ErrorState'
 import { LoadingState } from '@/components/feedback/LoadingState'
@@ -32,10 +32,39 @@ export default function BookDetailPage() {
   const remove = useDeleteBook()
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const navRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     if (pages && pages.length > 0 && selectedId === null) setSelectedId(pages[0].id)
   }, [pages, selectedId])
+
+  // Keyboard navigation through the page list (ignored while typing in inputs).
+  useEffect(() => {
+    if (!pages || pages.length === 0) return
+    function onKey(e: KeyboardEvent) {
+      const el = document.activeElement as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+      const list = pages ?? []
+      const idx = list.findIndex((p) => p.id === selectedId)
+      if (idx < 0) return
+      if (e.key === 'j' || e.key === 'ArrowDown') {
+        e.preventDefault()
+        if (idx < list.length - 1) setSelectedId(list[idx + 1].id)
+      } else if (e.key === 'k' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        if (idx > 0) setSelectedId(list[idx - 1].id)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [pages, selectedId])
+
+  // Keep the selected page button in view as it changes (incl. via keyboard).
+  useEffect(() => {
+    if (selectedId != null) {
+      navRef.current?.querySelector(`[data-pid="${selectedId}"]`)?.scrollIntoView({ block: 'nearest' })
+    }
+  }, [selectedId])
 
   const { data: page, isLoading: pageLoading } = usePage(selectedId)
 
@@ -139,10 +168,11 @@ export default function BookDetailPage() {
 
       {pages && pages.length > 0 ? (
         <div className="grid grid-cols-[180px_1fr] gap-4">
-          <nav className="max-h-[72vh] space-y-0.5 overflow-y-auto rounded-lg border border-border p-2">
+          <nav ref={navRef} className="max-h-[72vh] space-y-0.5 overflow-y-auto rounded-lg border border-border p-2">
             {pages.map((p) => (
               <button
                 key={p.id}
+                data-pid={p.id}
                 type="button"
                 onClick={() => setSelectedId(p.id)}
                 className={cn(

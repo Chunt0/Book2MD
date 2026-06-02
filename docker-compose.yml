@@ -1,3 +1,23 @@
+# Shared config for every marker conversion lane. Only `marker` carries the
+# build; the rest reuse the image it produces (book2md-marker).
+x-marker-lane: &marker-lane
+  image: book2md-marker
+  restart: unless-stopped
+  network_mode: host
+  environment:
+    HF_HOME: /cache/hf
+    TORCH_HOME: /cache/torch
+  volumes:
+    - ./data:/data
+    - marker-cache:/cache
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
 services:
   app:
     build:
@@ -17,6 +37,14 @@ services:
       DATABASE_PATH: /data/app.db
       AUTH_TOKEN: ${AUTH_TOKEN}
       MARKER_URL: http://localhost:8001
+      # Parallel conversion: 4 marker lanes (one book each). A single marker_server
+      # serializes requests (blocks its uvicorn loop), so each lane needs its own port.
+      MARKER_URLS: ${MARKER_URLS:-http://localhost:8001,http://localhost:8002,http://localhost:8003,http://localhost:8004}
+      CONVERT_CONCURRENCY: ${CONVERT_CONCURRENCY:-4}
+      # 4h per-book budget — big OpenStax books are 1k–1.8k pages and share the GPU.
+      CONVERT_TIMEOUT_MS: ${CONVERT_TIMEOUT_MS:-14400000}
+      # Smaller chunks stay under marker's ~290s/request cap when 4 books share the GPU.
+      MARKER_CHUNK_PAGES: ${MARKER_CHUNK_PAGES:-20}
       ENABLE_SWAGGER: ${ENABLE_SWAGGER:-false}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
@@ -25,26 +53,22 @@ services:
 
   # GPU PDF→Markdown service (M0+), deterministic — no LLM. network_mode: host →
   # serves :8001 on the host. Shares ./data with the Bun app so it can read uploaded
-  # PDFs by path and write extracted images back.
+  # PDFs by path and write extracted images back. marker2-4 are extra parallel lanes
+  # (each its own uvicorn process/port, since one marker_server serializes requests).
   marker:
+    <<: *marker-lane
     build:
       context: ./infra/marker
-    image: book2md-marker
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      HF_HOME: /cache/hf
-      TORCH_HOME: /cache/torch
-    volumes:
-      - ./data:/data
-      - marker-cache:/cache
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    command: ["marker_server", "--port", "8001"]
+  marker2:
+    <<: *marker-lane
+    command: ["marker_server", "--port", "8002"]
+  marker3:
+    <<: *marker-lane
+    command: ["marker_server", "--port", "8003"]
+  marker4:
+    <<: *marker-lane
+    command: ["marker_server", "--port", "8004"]
 
 volumes:
   marker-cache:

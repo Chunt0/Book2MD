@@ -27,8 +27,13 @@ export interface MarkerResponse {
   error?: string
 }
 
-/** POST a conversion to marker_server. Maps transport/upstream failures to envelope errors. */
-export async function callMarker(containerPath: string, opts: MarkerOptions = {}): Promise<MarkerResponse> {
+/** POST a conversion to a marker_server instance. `baseUrl` selects which instance
+ *  (parallel conversion runs several). Maps transport/upstream failures to envelope errors. */
+export async function callMarker(
+  containerPath: string,
+  opts: MarkerOptions = {},
+  baseUrl: string = env.MARKER_URL,
+): Promise<MarkerResponse> {
   const body: Record<string, unknown> = {
     filepath: containerPath,
     output_format: 'markdown',
@@ -39,14 +44,14 @@ export async function callMarker(containerPath: string, opts: MarkerOptions = {}
 
   let res: Response
   try {
-    res = await fetch(`${env.MARKER_URL}/marker`, {
+    res = await fetch(`${baseUrl}/marker`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(opts.timeoutMs ?? env.CONVERT_TIMEOUT_MS),
     })
   } catch (e) {
-    throw new ServiceUnavailableError(`marker unreachable at ${env.MARKER_URL}: ${String(e)}`)
+    throw new ServiceUnavailableError(`marker unreachable at ${baseUrl}: ${String(e)}`)
   }
   if (!res.ok) throw new BadGatewayError(`marker returned HTTP ${res.status}`)
 

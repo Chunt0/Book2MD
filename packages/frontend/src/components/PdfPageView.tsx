@@ -5,6 +5,18 @@ import { LoadingState } from '@/components/feedback/LoadingState'
 
 GlobalWorkerOptions.workerSrc = workerUrl
 
+// pdf.js sidecar resources, served by the Vite `pdfjsAssets` plugin (dev) and
+// copied into the build (prod). wasmUrl is what makes scanned/JPEG2000 (JPX)
+// and JBIG2 PDFs render — without it the image decoders never initialize and
+// such pages come out blank. The rest cover CMap/standard-font/ICC fallbacks.
+const PDFJS_RESOURCES = {
+  wasmUrl: '/pdfjs/wasm/',
+  cMapUrl: '/pdfjs/cmaps/',
+  cMapPacked: true,
+  standardFontDataUrl: '/pdfjs/standard_fonts/',
+  iccUrl: '/pdfjs/iccs/',
+}
+
 /** Renders one page of the book's source PDF to a canvas (fit-to-width, retina). */
 export function PdfPageView({ bookId, pageNumber }: { bookId: number; pageNumber: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -18,7 +30,7 @@ export function PdfPageView({ bookId, pageNumber }: { bookId: number; pageNumber
     let cancelled = false
     setError(null)
     setDoc(null)
-    const task = getDocument(`/api/books/${bookId}/pdf`)
+    const task = getDocument({ url: `/api/books/${bookId}/pdf`, ...PDFJS_RESOURCES })
     task.promise.then(
       (d) => {
         if (cancelled) void d.destroy()

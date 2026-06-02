@@ -37,6 +37,18 @@ export const env = {
   MARKER_DATA_DIR: optional('MARKER_DATA_DIR', '/data'),
   /** marker_server base URL (the API proxies it; SPA never calls it directly). */
   MARKER_URL: optional('MARKER_URL', 'http://localhost:8001'),
+  /** All marker_server instances (comma-separated base URLs). A single
+   * marker_server serializes requests — it blocks its uvicorn event loop during
+   * the synchronous converter() call — so parallel conversion needs one process
+   * per lane, each on its own port. Books are dispatched round-robin across these;
+   * defaults to the single MARKER_URL. */
+  MARKER_URLS: optional('MARKER_URLS', optional('MARKER_URL', 'http://localhost:8001'))
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+  /** How many books to convert at once (≤ MARKER_URLS.length — one book per
+   * instance, since each instance handles one at a time). Default 1 (sequential). */
+  CONVERT_CONCURRENCY: Math.max(1, Number(optional('CONVERT_CONCURRENCY', '1'))),
   /** Upload size cap (MB). */
   MAX_UPLOAD_MB: Number(optional('MAX_UPLOAD_MB', '200')),
   /** Overall conversion budget across all chunks (ms). */

@@ -193,7 +193,9 @@ export default function ReviewPage() {
       {!pages || pages.length === 0 ? (
         <ErrorState title="No pages" description="This book hasn't been converted yet." />
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-[120px_1fr_1fr]">
+        // minmax(0,1fr) (not 1fr) so a wide markdown line can't blow out its
+        // track and squeeze the PDF column — the column scrolls internally.
+        <div className="grid min-h-0 flex-1 grid-cols-[120px_minmax(0,1fr)_minmax(0,1fr)]">
           {/* page navigator */}
           <div className="flex min-h-0 flex-col border-r border-border">
             <button
@@ -235,7 +237,7 @@ export default function ReviewPage() {
           </div>
 
           {/* markdown: rendered / source + actions */}
-          <div className="flex min-h-0 flex-col">
+          <div className="flex min-h-0 min-w-0 flex-col">
             <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
               <Tabs value={mode} onValueChange={(v) => setMode(v as 'rendered' | 'source')}>
                 <TabsList>

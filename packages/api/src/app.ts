@@ -18,8 +18,17 @@ const SECURITY_HEADERS: Record<string, string> = {
   // connect-src is explicit: with same-origin (the default) 'self' is correct.
   // For split-origin (a non-empty VITE_API_URL) widen it to that origin AND add
   // CORS on the API — see GOTCHAS G13.
+  // The PDF review viewer (pdf.js) drives three of these allowances:
+  //  • font-src data:        — pdf.js injects each page's embedded fonts as
+  //                            `@font-face { src: url(data:font/woff2;base64,…) }`.
+  //  • img-src blob:         — its image decoders hand back decoded bitmaps as blobs.
+  //  • script-src 'wasm-unsafe-eval' — the OpenJPEG/JBIG2 wasm image decoders
+  //                            (needed for scanned/JPEG2000 PDFs) call
+  //                            WebAssembly.instantiate, which CSP gates behind this.
+  // Without these, PDF pages render blank. 'wasm-unsafe-eval' permits wasm
+  // compilation only — it does NOT enable JS eval().
   'content-security-policy':
-    "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
 }
 
 export const app = new Elysia()

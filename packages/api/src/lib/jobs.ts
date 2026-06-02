@@ -11,28 +11,51 @@ import { callMarker, parsePaginatedMarkdown, type ParsedPage } from './marker'
 import { getPdfPageCount } from './pdf'
 import { bookPaths, toMarkerPath, writeImages } from './storage'
 
-// In-process sequential job worker (concurrency 1 — one book at a time, one GPU).
-// A book is converted in page-range chunks (MARKER_CHUNK_PAGES each) because
-// marker runs one blocking request per call and Bun's fetch hard-caps at ~300s
-// (oven-sh/bun#16682) — a whole large book in one call always times out. Chunking
-// also gives real per-chunk progress. Enqueue chains onto a promise so jobs run
-// one at a time regardless of how many are submitted.
+// In-process job worker. A book is converted in page-range chunks
+// (MARKER_CHUNK_PAGES each) because marker runs one blocking request per call and
+// Bun's fetch hard-caps at ~300s (oven-sh/bun#16682) — a whole large book in one
+// call always times out. Chunking also gives real per-chunk progress.
+//
+// Concurrency: each marker_server serializes requests (it blocks its uvicorn event
+// loop during conversion), so true parallelism means one marker instance per lane.
+// We run CONVERT_CONCURRENCY lanes (capped at the number of MARKER_URLS); lane i
+// dispatches its books to MARKER_URLS[i]. A book runs on exactly one lane/instance
+// at a time. Different books on different lanes touch different rows/dirs — safe.
 
 const nowIso = () => new Date().toISOString()
 
-let queue: Promise<void> = Promise.resolve()
+const markerUrls = env.MARKER_URLS
+const laneCount = Math.max(1, Math.min(env.CONVERT_CONCURRENCY, markerUrls.length))
+const laneBusy: boolean[] = new Array(laneCount).fill(false)
+const pendingJobs: number[] = []
 
 export function enqueueConvert(jobId: number): void {
-  queue = queue
-    .then(() => runConvert(jobId))
-    .catch((err) => logger.error({ jobId, err: String(err) }, 'convert job crashed'))
+  if (!pendingJobs.includes(jobId)) pendingJobs.push(jobId)
+  pumpLanes()
+}
+
+/** Assign pending jobs to idle lanes; each lane re-pumps when its job finishes. */
+function pumpLanes(): void {
+  for (let lane = 0; lane < laneCount; lane++) {
+    if (laneBusy[lane]) continue
+    const jobId = pendingJobs.shift()
+    if (jobId === undefined) break
+    laneBusy[lane] = true
+    const markerUrl = markerUrls[lane % markerUrls.length]
+    runConvert(jobId, markerUrl)
+      .catch((err) => logger.error({ jobId, lane, err: String(err) }, 'convert job crashed'))
+      .finally(() => {
+        laneBusy[lane] = false
+        pumpLanes()
+      })
+  }
 }
 
 interface ConvertParams {
   forceOcr?: boolean
 }
 
-async function runConvert(jobId: number): Promise<void> {
+async function runConvert(jobId: number, markerUrl: string): Promise<void> {
   const job = db.select().from(jobs).where(eq(jobs.id, jobId)).get()
   if (!job || job.status === 'canceled') return
   const book = job.bookId ? db.select().from(books).where(eq(books.id, job.bookId)).get() : null
@@ -41,6 +64,16 @@ async function runConvert(jobId: number): Promise<void> {
       .set({ status: 'failed', error: 'Book not found', finishedAt: nowIso() })
       .where(eq(jobs.id, jobId))
       .run()
+    return
+  }
+  // Soft-deleted out from under us (deleted while queued/in-flight): cancel the
+  // job and free the lane instead of burning the GPU on a book nobody can see.
+  if (book.deletedAt) {
+    db.update(jobs)
+      .set({ status: 'canceled', stage: 'book deleted', finishedAt: nowIso() })
+      .where(eq(jobs.id, jobId))
+      .run()
+    logger.info({ jobId, bookId: book.id }, 'skipping convert — book is deleted')
     return
   }
 
@@ -85,13 +118,13 @@ async function runConvert(jobId: number): Promise<void> {
       const chunkOpts = { forceOcr, pageRange: `${startPage}-${endPage}`, timeoutMs: env.MARKER_CHUNK_TIMEOUT_MS }
       let resp
       try {
-        resp = await callMarker(markerPath, chunkOpts)
+        resp = await callMarker(markerPath, chunkOpts, markerUrl)
       } catch (e) {
         // Retry once on a transient transport failure (timeout/unreachable); an
         // upstream "marker failed" (BadGatewayError) is deterministic — don't retry.
         if (!(e instanceof ServiceUnavailableError)) throw e
         logger.warn({ jobId, bookId: book.id, chunk: c + 1, err: String(e) }, 'marker chunk transient failure — retrying once')
-        resp = await callMarker(markerPath, chunkOpts)
+        resp = await callMarker(markerPath, chunkOpts, markerUrl)
       }
       Object.assign(images, resp.images)
       outputs.push(resp.output)
@@ -166,6 +199,7 @@ export function initJobs(): void {
     .set({ status: 'failed', errorMessage: 'Conversion interrupted by server restart' })
     .where(eq(books.status, 'converting'))
     .run()
+  logger.info({ lanes: laneCount, markerUrls }, 'convert worker ready')
   const queued = db.select().from(jobs).where(eq(jobs.status, 'queued')).all()
   for (const j of queued) enqueueConvert(j.id)
   if (queued.length > 0) logger.info({ count: queued.length }, 'resumed queued jobs')
