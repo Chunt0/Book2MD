@@ -16,6 +16,7 @@
     "db:migrate": "bun --filter '@app/api' db:migrate",
     "db:seed": "bun --filter '@app/api' db:seed",
     "db:studio": "bun --filter '@app/api' db:studio",
+    "book2md": "bun packages/api/scripts/book2md.ts",
     "backup": "bash scripts/backup.sh",
     "restore": "bash scripts/restore.sh"
   },

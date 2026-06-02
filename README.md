@@ -75,6 +75,22 @@ bun run db:migrate     # apply migrations (also runs on API boot)
 docker compose up -d --build marker   # (re)build/start the GPU conversion service
 ```
 
+## Command line
+
+Everything the web UI does is also scriptable from the terminal via `book2md`, a thin
+client over the same API (the server stays the single source of truth):
+
+```bash
+bun run book2md convert ch1.pdf --tags math   # upload + convert, follow progress
+bun run book2md list --status converted        # browse the library
+bun run book2md export american-government-4e --out ./out/ --images
+bun run book2md help                           # full command list
+```
+
+A book ref is an id, a slug, or a unique title fragment. The API must be running
+(dev API is `:4000` — `API_URL=http://localhost:4000 bun run book2md …`). Full
+reference: [`docs/CLI.md`](./docs/CLI.md).
+
 ## Where things live
 
 - `packages/api` — Bun + Elysia API (books / pages / jobs / tags, the conversion worker,

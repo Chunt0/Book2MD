@@ -92,4 +92,9 @@ bun run db:generate  # after schema.ts changes
 bun run db:migrate   # apply migrations
 bun run db:seed      # idempotent
 docker compose up -d --build   # full stack on :3000
+bun run book2md help # CLI client over the API (convert/list/status/export/lint) — see docs/CLI.md
 ```
+
+A CLI lives at `packages/api/scripts/book2md.ts` — a thin HTTP client over the API, so
+the server stays the single source of truth. To add a command, call an existing
+endpoint; don't reach into the DB or duplicate route logic. See `docs/CLI.md`.

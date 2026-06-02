@@ -15,6 +15,7 @@
   "scripts": {
     "dev": "PORT=4000 bun --env-file=../../.env --watch src/index.ts",
     "start": "bun src/index.ts",
+    "cli": "bun scripts/book2md.ts",
     "test": "bun test",
     "type-check": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
