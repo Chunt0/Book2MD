@@ -26,3 +26,6 @@ backups/
 .vscode/
 
 GutenburgPress/
+
+# Generated corpus dump (export-all.ts) — large, regenerable
+book-exports/
